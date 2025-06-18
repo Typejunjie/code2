@@ -183,11 +183,23 @@ def add_edge(u_input, model, adj, opt):
 
     model.eval()
     adj_item = adj[:pre_adj.shape[0], :pre_adj.shape[1]]
-    pre_adj[pre_adj < opt.threshold] = 0
-    pre_adj[pre_adj > opt.threshold] = 1
     pre_adj[adj_item < 1] = 0
+    pre_adj[pre_adj < opt.threshold] = 0
     pre_adj.fill_diagonal_(0)
+
+    # ---------------------------
+    pre_adj[pre_adj > opt.threshold] = 1
     adj[:pre_adj.shape[0], :pre_adj.shape[1]] += pre_adj * opt.weight
+
+    # ---------------------------
+    # dynamic_weights = local_path_weight(adj_item, pre_adj)
+    # print(dynamic_weights)
+    # adj[:pre_adj.shape[0], :pre_adj.shape[1]] += dynamic_weights * opt.weight * 10
+
+    # ---------------------------
+    # dynamic_weights = degree_normalized_weight(adj_item, pre_adj)
+    # adj[:pre_adj.shape[0], :pre_adj.shape[1]] += dynamic_weights
+
     return adj.numpy()
 
 def jaccard_similarity(u_input, adj):
@@ -207,4 +219,33 @@ def jaccard_similarity(u_input, adj):
     adj[:len(nodes), :len(nodes)] += J * 3
     return adj.numpy()
 
+def degree_normalized_weight(adj, pre_adj, threshold=0.9):
+    """
+    :param adj: 原始邻接矩阵（float32或float64）
+    :param pre_adj: 链路预测的边矩阵（float32或float64）
+    :param threshold: 筛选边的阈值
+    :return: 动态权重矩阵（与pre_adj类型一致）
+    """
+    # 统一数据类型为float32
+    adj = adj.float()
+    pre_adj = pre_adj.float()
+    
+    degrees = adj.sum(dim=1) + 1e-6  # float32
+    edge_mask = (pre_adj >= threshold).float()
+    src, dst = (pre_adj >= threshold).nonzero(as_tuple=True)
+    weights = 1.0 / (degrees[src] + degrees[dst])  # float32
+    weight_matrix = torch.zeros_like(pre_adj, dtype=torch.float32)
+    weight_matrix[src, dst] = weights
+    return edge_mask * weight_matrix
 
+def local_path_weight(adj, pre_adj, threshold=0.9, k=2):
+    """
+    考虑k跳路径的权重（k=2时类似共同邻居的扩展）
+    """
+    adj_matrix = adj.float()
+    path_k = torch.matrix_power(adj_matrix, k)  # k跳路径数
+    src, dst = (pre_adj >= threshold).nonzero(as_tuple=True)
+    weights = path_k[src, dst] / (path_k.sum(dim=1)[src] + 1e-6)  # 归一化
+    weight_matrix = torch.zeros_like(pre_adj)
+    weight_matrix[src, dst] = weights
+    return weight_matrix * (pre_adj >= threshold).float()
